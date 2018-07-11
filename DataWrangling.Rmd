@@ -1,0 +1,158 @@
+---
+title: "Comparing Ivies and Top Liberal Arts Colleges: Does Higher Endowment Lead to Better Faculty Pay?"
+author: "Haochen Wang, in collaboration with Kevin Choi"
+date: "Spring 2018"
+output: html_document
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+# Loading packages
+library(rscorecard)
+library(dplyr)
+library(stringr)
+library(rvest)
+library(ggplot2)
+library(RColorBrewer)
+library(ggthemes)
+```
+
+As shown in [this New York Times article](https://www.nytimes.com/interactive/2017/05/25/sunday-review/opinion-pell-table.html), a school's endowment is not necessarily correlated with the socioeconomic status of its student body. However, that money must go somewhere, so would it go towards benefiting the faculty? Additionally, does any relationship between endowment and faculty salary differ based on the college type?
+
+These are fairly straightforward questions to answer. We have all the necessary information given to us in the exhaustive [College Scorecard](https://collegescorecard.ed.gov/data/) and some information about endowments is given in the same [New York Times article](https://www.nytimes.com/interactive/2017/05/25/sunday-review/opinion-pell-table.html). However, this is too much data to work with! Thankfully, with the dplyr package, we can sort through all of this data and answer our question.
+
+The first thing we must do is download our data. The U.S. Department of Education's College Scorecard compiles an enormous amount of data on US colleges, which can be accessed through the package rscorecard and with an API key; however, portions of the data are provided as CSVs, which R can process directly. As such, we dive right into the CSV containing only the most recently uploaded data instead of the entire dataset. We simply call the CSV using `read.csv()` and give it the url that the file is located at. Other arguments clean up the data, ensuring that the headers given by the file are used as names instead of the first row, preventing all strings from being made into factors, and replacing all missing and invalid values as NAs.
+
+```{r}
+# Read from College Scorecard Data
+colleges <- read.csv("https://ed-public-download.app.cloud.gov/downloads/Most-Recent-Cohorts-All-Data-Elements.csv",
+                     header = TRUE,
+                     stringsAsFactors = FALSE,
+                     na.strings = c("NA", "NULL"))
+```
+
+Next, we pick a small subset of the data that includes the Ivy League as well as top liberal arts colleges. To isolate these data points, we use `filter()` from the dplyr package. This allows us to select the rows we want based on certain criteria -- in this case, the college name.
+
+```{r}
+# Select colleges
+ivylac <- colleges %>%
+  filter(INSTNM %in% c("Harvard University", # Ivy league colleges
+                     "Princeton University", 
+                     "Yale University", 
+                     "Cornell University", 
+                     "Brown University", 
+                     "Columbia University in the City of New York", 
+                     "Dartmouth College", 
+                     "University of Pennsylvania",
+                     "Williams College", # Top 8 liberal arts colleges in 2018 USNews ranking
+                     "Amherst College", 
+                     "Swarthmore College", 
+                     "Bowdoin College", 
+                     "Wellesley College", 
+                     "Middlebury College", 
+                     "Pomona College", 
+                     "Carleton College",
+                     "Reed College")) # And Reed!
+```
+
+Next, we want the endowment variable, which is in a table in the New York Times article. To scrape the table from such HTML document, we use the rvest package. After specifying the url to read, we use the `html_node()` function to select the node for the table and use the function `html_table()` to parse the HTML table into a dataframe. Finally, we want to clean up the data so it's easy to use. `colnames()` allows us to rename the columns to have more useful names. The `mutate()` function from dplyr allows us to create a new column out of our previous columns. In this case, we use `mutate()` to clean up the column Endowment by taking out extra characters and converting the column to a numeric variable. The `str_replace()` function is from the stringr package.
+
+```{r}
+# Pull data from NYT so that we can have an Endowment variable
+url <- "https://www.nytimes.com/interactive/2017/05/25/sunday-review/opinion-pell-table.html"
+college <- url %>%
+  read_html() %>%
+  html_node(xpath = '//*[@id="opinion-pell-table"]/div/div[1]/table') %>%
+  html_table()
+colnames(college) <- c("Rank", "College", "Freshman", "Pellgrad", "Midincome", "Collegeacc", "Endowment")
+college2 <- college %>%
+  mutate(Endowment2 = str_replace(Endowment, "[$]", ""),
+         Endowment2 = str_replace(Endowment2, "k", ""),
+         Endowment2 = str_replace(Endowment2, "m", ""),
+         Endowment2 = as.numeric(Endowment2),
+         Endowment2 = if_else(str_detect(Endowment, "m"), 
+                              Endowment2*1000,
+                              Endowment2))
+```
+
+Now, to get a workable dataset with all of the information we want, we will join the two datasets. To join two datasets, we need to specify the two datasets we want to merge and a key to merge them by. A key is just a variable to join by. In this case, we joined by the college name, which is encoded as INSTNM for our College Scorecard dataset and College for the New York Times article dataset. Before joining, we use `mutate()` to change the name of an observation in the New York Times article dataset from Columbia University to Columbia University in the City of New York. This makes the observation consistent with the the College Scorecard dataset, so the two correctly join.
+
+```{r}
+# Recode Columbia University so data correctly merges
+college2 <- college2 %>%
+  mutate(College = recode(College, "Columbia University" = "Columbia University in the City of New York"))
+
+# Join the two datasets
+endowivylac <- left_join(ivylac, college2, by = c("INSTNM" = "College"))
+```
+
+We're now almost ready to look at our data! We just need to choose which variables we want to be looking at. We first clean up our dataset using the `mutate()` function. We do this to make our variables consistent. Our faculty salary is per month while the endowment is per year. As such, we multiplied the monthly salary by nine since professors do not work the entire year. Additionally, as the endowment is in thousands of dollars, the salary was also divided by one thousand. Finally, using the `select()` function from the dplyr package, we selected the columns (or variables) we wanted, which were just the institution names, the annual salary for faculty members, and the endowment per student. Now we can look at our dataset!  
+
+```{r}
+# Select interested variables
+endowivylac <- endowivylac %>%
+  # Converting to annual average faculty salary
+  mutate(annualAveSal = AVGFACSAL*9) %>%
+  # Converting to thousands of dollars to be consistent with the endowment
+  mutate(annualAveSal = annualAveSal/1000) %>% 
+  # Institution name
+  # Average faculty salary
+  # Per student endowment
+  select(INSTNM, annualAveSal, Endowment2)
+
+# Check dataframe
+endowivylac
+```
+  
+Once we have everything in the right units, we can do more wrangling to our dataset to help us better understand the data. The column INSTNM has school names, but we would like to identify each one as part of the Ivy League or a liberal arts college (Lac). We do so by using the `mutate()` function to create a new variable, Collegetype. If INSTNM contains the string “University” or is “Dartmouth College”, Collegetype is Ivy. Otherwise, it is Lac. Containment is checked by the `grepl()` function.
+
+```{r}
+# Relabel institution as ivy or lac
+endowivylac <- endowivylac %>%
+  mutate("Collegetype" = ifelse(grepl("University", endowivylac$INSTNM) | grepl("Dartmouth College", endowivylac$INSTNM), "Ivy", "Lac"))
+```
+
+Of course, to answer our question, we can examine the table and hope to get something out of the dry numbers. But better yet, we can create an informative visualization. The ggplot2 package includes functions that do the job easily; we just have to feed in the dataframe and specify the variables to use for constructing the graphic. Here, we produce a scatterplot, displaying the endowment amount on the x-axis and the faculty salary on the y-axis, and color-code the datapoints by college type. 
+
+```{r, fig.width = 10}
+# Plot endowment vs salary
+ggplot(endowivylac, aes(x = Endowment2, y = annualAveSal, color = Collegetype)) + 
+  geom_point() +
+  labs(color = "College Type",
+       x = "Endowment per student (Thousands of Dollars)", 
+       y = "Average annual faculty salary (Thousands of Dollars)", 
+       title = "Endowment per student vs Average annual faculty salary",
+       subtitle = "CollegeScoreCard data") +
+  scale_color_brewer(labels = c("Ivy League", "Liberal Arts College"), 
+                     palette = "Dark2") +
+  theme_stata() +
+  theme(axis.title.y = element_text(margin = margin(r = 20)),
+        axis.title.x = element_text(margin = margin(t = 10)))
+```
+
+Note that we do not observe a strong positive linear relationship between per capita endowment and faculty salary for Ivy League and liberal arts colleges. So, unfortunately and mysteriously, the endowment money does not seem to be helping the faculty much either, at least among the top colleges. If stratified by college type, Ivies consistently offer higher average annual faculty salary with more spread for the endowment amount, and vice versa for liberal arts colleges.
+
+A major strength of dplyr is that we can group the dataframe by certain variables, analyze each group independently by operating some functions on it, and produce a new summaristic dataframe. For our college data, we perhaps want to utilize this “split-apply-combine” strategy to present a concise description of the differences between the Ivy League and liberal arts institutions in a tabular form. We first use `group_by()` to split the dataframe into two groups, based on the college type. Next, `summarise()` is used to collapse each group into a single-row summary. The means of average faculty salary and endowment per student, and the number of observations for each group are what we looked at. `summarise()` can also take in a few other base functions, including max, min, median, sd. 
+
+```{r}
+# Variable summaries based on ivy or lac
+sumivylac <- endowivylac %>%
+  group_by(Collegetype) %>%
+  summarise(meanAAS = mean(annualAveSal), 
+            meanEndow = mean(Endowment2), 
+            size = n())
+```
+
+Finally, we print out our final dataframe. Look how different and compact it is compared to the very original data we downloaded from College Scorecard! Wrangling can turn complex raw data into more interpretable format. Powerful? Yes, but thanks to R package developers, the script is also pretty accessible and straightforward to use. Wrangling in our toolbox truly means numerous possibilities for answering questions.
+
+```{r}
+# Check dataframe
+sumivylac
+```
+
+Source: https://www.nytimes.com/interactive/2017/05/25/sunday-review/opinion-pell-table.html  
+Source: https://collegescorecard.ed.gov/data/
